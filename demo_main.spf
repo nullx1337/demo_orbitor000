@@ -1,0 +1,226 @@
+3BBA1716-3F89-49F1-B23D-724039F3A9C8
+
+
+
+#define mod(x, y) (x - y * floor(x / y))
+
+// Sadly I don't know more digits
+#define PI 3.1415926535897932384626433832795
+
+// Default shader intput
+struct PS_Data
+{
+	float4 position : SV_POSITION;
+	float2 uv : UV;
+};
+
+
+struct RayHit
+{
+	float f;
+	float k;
+	float3 p;
+	float3 n;
+};
+
+static float distTwisted;
+static float distMenger; 
+
+
+float sinIO(float x)
+{
+    return sin(x)*0.5 + 0.5;
+}
+
+float sinBetween(float x, float a, float b)
+{
+    return sinIO(x)*a + (b - sinIO(x)*b);
+}
+
+float cosIO(float x)
+{
+    return cos(x)*0.5 + 0.5;
+}
+
+float cosBetween(float x, float a, float b)
+{
+    return cosIO(x)*a + (b - cosIO(x)*b);
+}
+
+float eq(float2 x, float2 y)
+{
+    return 1.0 - abs(sign(length(x-y)));
+}
+
+float sdBox( float3 p, float3 b )
+{
+  float3 d = abs(p) - b;
+  return min(max(d.x,max(d.y,d.z)),0.0) + length(max(d,0.0));
+}
+
+
+float sdCross( float3 p )
+{
+  float da = sdBox(p.xyz,float3(99099.0,1.0,1.0));
+  float db = sdBox(p.yzx,float3(1.0,99099.0,1.0));
+  float dc = sdBox(p.zxy,float3(1.0,1.0,99099.0));
+  return min(da,min(db,dc));
+}
+
+
+float3 opTwist( float3 p )
+{
+		float mp = sinBetween(GlobalTime,-2.0,2.0);
+    float c = cos(mp*p.y);
+    float s = sin(mp*p.y);
+    float2x2  m = float2x2(c,-s,s,c);
+    float3  q = float3(mul(m,p.xz),p.y);
+    return q;
+}
+
+
+float3x3 rot(float3 ang) {
+	float2 a1 = float2(sin(ang.x),cos(ang.x));
+    float2 a2 = float2(sin(ang.y),cos(ang.y));
+    float2 a3 = float2(sin(ang.z),cos(ang.z));
+    float3x3 m;
+    m[0] = float3(a1.y*a3.y+a1.x*a2.x*a3.x,a1.y*a2.x*a3.x+a3.y*a1.x,-a2.y*a3.x);
+	m[1] = float3(-a2.y*a1.x,a1.y*a2.y,a2.x);
+	m[2] = float3(a3.y*a1.x*a2.x+a1.y*a3.x,a1.x*a3.x-a1.y*a3.y*a2.x,a2.y*a3.y);
+	return m;
+}
+
+
+float map(float3 p)
+{
+	float o = 0.0;
+	float boxSize = 1.25;
+	float3 b = float3(boxSize,boxSize,boxSize);
+
+	p += float3(2.0,0.0,0.0);
+ 	distMenger = sdBox(p ,b);
+	
+ 	//o = max(o,-sdCross(p,boxSize/3.0));
+	
+	float s = 1.0;
+  for( int m=0; m<2; m++ )
+  {
+      float3 a = mod( p*s, 2.0 )-1.0;
+      s *= 3.0;
+      float3 r = 1.0 - 3.0*abs(a);
+
+      float c = sdCross(r)/s;
+      distMenger = max(distMenger,c);
+   }
+
+	distMenger = max(distMenger, -sdBox(mul(p - float3(sinBetween(GlobalTime*0.5,0.,2.5),sinBetween(GlobalTime*0.5,.0,-2.5),sinBetween(GlobalTime*0.5,0.,2.5)), rot(float3(0.785,.0,0.785))),boxSize*2.));
+ 
+p -= float3(2.0,0.0,0.0);
+
+
+	//for(float i = -5.0; i <= 5.; ++i)
+//{
+//		distTwisted = min(sdBox(p-float3(i,0.0,0.0),b),distTwisted);
+		
+//}
+	distTwisted = sdBox(p-float3(2.,0.0,0.0),b);
+		
+	//o = distMenger;
+	o = min(distTwisted, distMenger);
+
+	return o;
+}
+
+float3 normal(float3 p)
+{
+    float2 e = float2(-1., 1.)*2e-5;
+	return normalize(e.yxx*map(p + e.yxx) + e.xxy*map(p + e.xxy) + 
+					 e.xyx*map(p + e.xyx) + e.yyy*map(p + e.yyy));   
+}
+
+float3x3 setCamera( float3 ro, float3 ta, float cr )
+{
+	float3 cw = normalize(ta-ro);
+	float3 cp = float3(sin(cr), cos(cr),0.0);
+	float3 cu = normalize( cross(cw,cp) );
+	float3 cv = normalize( cross(cu,cw) );
+    return float3x3( cu, cv, cw );
+}
+
+
+
+
+RayHit trace(float3 o, float3 rd)
+{
+
+
+	float totalDist = 0, currentDist = 0, n = 0;
+	float3 currentPoint;
+	float3 tco = rd - o;
+	
+	for(float i = 0; i<128.0; i++)
+	{
+		n++;
+		currentPoint = o + rd * totalDist;
+		totalDist += currentDist = map(currentPoint);
+		
+		if(currentDist < 0.001)
+			break;
+	}
+	
+	RayHit rh;
+	rh.f = totalDist;
+	rh.k = currentDist;
+	rh.p = o + rd * totalDist;
+	rh.n = normal(rh.p);
+
+	return rh;
+}
+
+float3 shade(RayHit rh)
+{
+	float3 o = float3(0.0,0.0,0.0);
+	
+	o = lerp(float3(sin(GlobalTime)*0.5+0.5,cos(GlobalTime)*0.5+0.5,0.0),o, step(rh.k,distTwisted));
+	o = lerp(rh.n,o, step(rh.k,distMenger));
+	//o = lerp(o,float3(0.,1.0,0.0), step(distTwisted,rh.f));
+	//o = lerp(float3(1.0,0.,0.), float3(0.0,1.0,0.0), step(distMenger,distTwisted));
+
+	
+	return o;
+}
+
+float4 PS_Main(PS_Data input) : SV_TARGET
+{
+
+
+	float4 O = float4(0.0,0.0,0.0,1.0);
+	float2 uvt = input.uv * 2.0-1.0;
+
+	//camera
+	float3 TargetPoint = float3(.0,0.,0.0);
+	float r = 20.0;
+	float3 camPos = float3(0.0,0.0,5.);
+
+	float3 camTarget = normalize(TargetPoint - camPos);//
+
+	float3x3 cam = setCamera(camPos,camTarget,0.0);
+	float3 camDir = mul(cam , normalize(float3(uvt.x,uvt.y,1.0)));
+
+	RayHit rh = trace(camPos, camDir);
+	
+	O.xyz = shade(rh);
+
+   return O;
+}
+
+
+
+
+
+
+
+
+
+~
+~3BBA1716-3F89-49F1-B23D-724039F3A9C8
